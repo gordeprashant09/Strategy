@@ -410,8 +410,11 @@ def score_fundamental(info: dict) -> list:
     """
     rows = []
 
-    def add(name, val, benchmark, verdict_fn, note=""):
-        v_str = safe(val) if isinstance(val, (int, float)) else str(val or "N/A")
+    def add(name, val, benchmark, verdict_fn, note="", display_override=None):
+        if display_override is not None:
+            v_str = display_override
+        else:
+            v_str = safe(val) if isinstance(val, (int, float)) else str(val or "N/A")
         verdict, colour = verdict_fn(val)
         display_val = colour(v_str) if colour else v_str
         rows.append([name, display_val, benchmark, verdict, note])
@@ -588,8 +591,9 @@ def score_fundamental(info: dict) -> list:
         if v is None: return ("N/A", None)
         if v > 0:    return ("✅ Positive FCF", good)
         return ("🔴 Negative FCF", bad)
-    add("Free Cash Flow", crore(fcf) if fcf else None,
-        "Positive = company generates real cash", fcf_v)
+    add("Free Cash Flow", fcf,
+        "Positive = company generates real cash", fcf_v,
+        display_override=crore(fcf) if fcf else None)
 
     return rows
 
@@ -870,11 +874,33 @@ def print_news(news_list: list, symbol: str):
         print("  No news found.")
         return
     for i, item in enumerate(news_list[:10], 1):
-        title     = item.get("title", "No title")
+        # yfinance >= 0.2.x nests fields inside item["content"]; older versions are flat
+        content   = item.get("content", item)
+        title     = content.get("title") or item.get("title", "No title")
+
+        # publisher: new API uses content["provider"]["displayName"], old uses "publisher"
+        provider  = content.get("provider", {})
+        publisher = provider.get("displayName") if isinstance(provider, dict) else None
+        publisher = publisher or content.get("publisher") or item.get("publisher", "")
+
+        # timestamp: new API uses content["pubDate"] (ISO string), old uses providerPublishTime (epoch int)
+        pub_date  = content.get("pubDate") or ""
         pub_time  = item.get("providerPublishTime", 0)
-        publisher = item.get("publisher", "")
-        link      = item.get("link", "")
-        dt_str    = datetime.utcfromtimestamp(pub_time).strftime("%d %b %Y %H:%M") if pub_time else ""
+        if pub_date:
+            try:
+                dt_str = datetime.fromisoformat(pub_date.replace("Z", "+00:00")).strftime("%d %b %Y %H:%M")
+            except Exception:
+                dt_str = pub_date[:16]
+        elif pub_time:
+            dt_str = datetime.utcfromtimestamp(pub_time).strftime("%d %b %Y %H:%M")
+        else:
+            dt_str = ""
+
+        # link: new API uses content["canonicalUrl"]["url"], old uses "link"
+        canon_url = content.get("canonicalUrl", {})
+        link      = canon_url.get("url") if isinstance(canon_url, dict) else None
+        link      = link or content.get("link") or item.get("link", "")
+
         print(f"\n  {Fore.CYAN}{i}. {title}{Style.RESET_ALL}")
         print(f"     📰 {publisher}  |  📅 {dt_str}")
         if link:
